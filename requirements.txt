@@ -1,0 +1,5 @@
+ollama
+pyautogui
+pynput
+scikit-learn
+numpy
