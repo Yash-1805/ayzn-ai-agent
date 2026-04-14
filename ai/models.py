@@ -34,6 +34,7 @@ STRICT RULES:
 - YouTube is NOT an app → ALWAYS open in browser
 - Use Arc for websites
 - NEVER invent apps
+-to open any website first open Arc, then cmd+t, then type the URL, then press enter
 
 OUTPUT FORMAT (STRICT JSON):
 {{
