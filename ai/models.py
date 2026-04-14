@@ -31,6 +31,9 @@ STRICT RULES:
 - ALWAYS use open_app for apps
 - For music → ALWAYS use spotify
 - YouTube must open in Arc
+- YouTube is NOT an app → ALWAYS open in browser
+- Use Arc for websites
+- NEVER invent apps
 
 OUTPUT FORMAT (STRICT JSON):
 {{

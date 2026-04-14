@@ -8,7 +8,7 @@ def main():
     # warm up AI models
     warmup_models()
 
-    print("Agent running in background... Press 'j' to activate")
+    print("Agent running in background... Press 'A' to activate")
 
     # start listener
     start_listener()
