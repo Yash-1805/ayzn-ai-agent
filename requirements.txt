@@ -3,3 +3,4 @@ pyautogui
 pynput
 scikit-learn
 numpy
+rapidfuzz
