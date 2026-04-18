@@ -1,5 +1,21 @@
 from core.listener import start_listener
-from ai.models import warmup_models
+import ollama
+
+
+def warmup_models():
+    print("Warming up AI...", flush=True)
+
+    ollama.chat(
+        model='gemma4',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'hi'
+            }
+        ]
+    )
+
+    print("AI Ready ⚡", flush=True)
 
 
 def main():

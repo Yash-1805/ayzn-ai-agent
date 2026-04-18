@@ -1,8 +1,9 @@
 # =====================================================
 # core/executor.py
-# AYZN Main Execution Pipeline
-# Gemma + Hierarchical Memory + Step Skills
-# Rechecked / Clean Stable Version
+# AYZN FINAL RECHECKED EXECUTOR
+# Fast Memory First + One Intent Call + One Planner Call
+# Memory / Skill Admin Commands Included
+# Cleaned + Safe Version
 # =====================================================
 
 import pyautogui
@@ -11,15 +12,27 @@ import json
 import subprocess
 
 from ai.models import ask_gemma, ask_intent
-from memory.manager import get_memory, save_memory
-from memory.skills import auto_learn_from_steps
+from memory.manager import (
+    get_memory,
+    save_memory,
+    show_memory,
+    delete_memory,
+    clear_memory
+)
+
+from memory.skills import (
+    auto_learn_from_steps,
+    list_skills,
+    delete_skill,
+    clear_skills
+)
 
 
 ACTION_DELAY = 0.15
 
 
 # =====================================================
-# ACTIVE APP DETECTION
+# ACTIVE APP
 # =====================================================
 
 def get_active_app():
@@ -58,7 +71,7 @@ def open_app(app_name):
 
 
 # =====================================================
-# WAIT FOR APP FOCUS
+# WAIT FOR FOCUS
 # =====================================================
 
 def wait_for_focus(app_name, timeout=5):
@@ -78,7 +91,7 @@ def wait_for_focus(app_name, timeout=5):
 
 
 # =====================================================
-# EXTRACT JSON STEPS
+# EXTRACT JSON
 # =====================================================
 
 def extract_steps(text):
@@ -104,7 +117,7 @@ def extract_steps(text):
 # =====================================================
 
 def clean_steps(steps):
-    cleaned = []
+    fixed = []
 
     for step in steps:
         action = str(step.get("action", "")).strip().lower()
@@ -113,40 +126,39 @@ def clean_steps(steps):
         if not action:
             continue
 
-        # convert cmd -> command
         value = value.replace("cmd", "command")
 
-        # wrong combo sent as key
+        # fix combo wrongly sent as press_key
         if action == "press_key" and "+" in value:
             action = "hotkey"
 
-        # wrong single key sent as hotkey
+        # fix single key wrongly sent as hotkey
         if action == "hotkey" and "+" not in value:
             action = "press_key"
 
-        # wait safety cap
+        # cap waits
         if action == "wait":
             try:
                 wait_time = float(value)
-                wait_time = min(wait_time, 3)
+                wait_time = max(0, min(wait_time, 3))
                 value = str(wait_time)
             except:
                 value = "1"
 
-        # remove empty values where needed
+        # skip empty invalid values
         if action in ["open_app", "press_key", "hotkey", "type"] and not value:
             continue
 
-        cleaned.append({
+        fixed.append({
             "action": action,
             "value": value
         })
 
-    return cleaned
+    return fixed
 
 
 # =====================================================
-# EXECUTE ONE STEP
+# RUN SINGLE STEP
 # =====================================================
 
 def run_step(step):
@@ -193,6 +205,44 @@ def execute_steps(steps):
 
 
 # =====================================================
+# ADMIN COMMANDS
+# =====================================================
+
+def handle_admin(command):
+    cmd = command.lower().strip()
+
+    # memory controls
+    if cmd == "show memory":
+        show_memory()
+        return True
+
+    if cmd == "clear memory":
+        clear_memory()
+        return True
+
+    if cmd.startswith("delete memory "):
+        target = command[14:].strip()
+        delete_memory(target)
+        return True
+
+    # skill controls
+    if cmd == "show skills":
+        list_skills()
+        return True
+
+    if cmd == "clear skills":
+        clear_skills()
+        return True
+
+    if cmd.startswith("delete skill "):
+        target = command[13:].strip()
+        delete_skill(target)
+        return True
+
+    return False
+
+
+# =====================================================
 # MAIN EXECUTION ENTRY
 # =====================================================
 
@@ -202,11 +252,18 @@ def smart_execute(command):
     if not command:
         return False
 
+    # ---------------------------------------------
+    # ADMIN COMMANDS
+    # ---------------------------------------------
+
+    if handle_admin(command):
+        return True
+
     print("Checking memory...")
 
-    # -------------------------------------------------
-    # LEVEL 1/2/3 MEMORY
-    # -------------------------------------------------
+    # ---------------------------------------------
+    # MEMORY FIRST (NO LLM)
+    # ---------------------------------------------
 
     steps = get_memory(command)
 
@@ -215,9 +272,9 @@ def smart_execute(command):
         execute_steps(steps)
         return True
 
-    # -------------------------------------------------
-    # INTENT CLASSIFIER
-    # -------------------------------------------------
+    # ---------------------------------------------
+    # SINGLE INTENT CALL
+    # ---------------------------------------------
 
     meta = ask_intent(command)
 
@@ -227,9 +284,9 @@ def smart_execute(command):
     print(f"[INTENT] {intent}")
     print(f"[CATEGORY] {category}")
 
-    # -------------------------------------------------
-    # GEMMA PLANNER
-    # -------------------------------------------------
+    # ---------------------------------------------
+    # SINGLE PLANNER CALL
+    # ---------------------------------------------
 
     print("Trying Gemma ⚡")
 
@@ -243,9 +300,9 @@ def smart_execute(command):
         print("[FAILED] No valid steps")
         return False
 
-    # -------------------------------------------------
+    # ---------------------------------------------
     # CLEAN PLAN
-    # -------------------------------------------------
+    # ---------------------------------------------
 
     steps = clean_steps(steps)
 
@@ -253,17 +310,23 @@ def smart_execute(command):
         print("[FAILED] Invalid cleaned steps")
         return False
 
-    # -------------------------------------------------
+    # ---------------------------------------------
     # EXECUTE
-    # -------------------------------------------------
+    # ---------------------------------------------
 
     execute_steps(steps)
 
-    # -------------------------------------------------
-    # LEARN SUCCESSFUL TASK
-    # -------------------------------------------------
+    # ---------------------------------------------
+    # SAVE LEARNED MEMORY
+    # ---------------------------------------------
 
-    save_memory(command, steps)
+    save_memory(
+        command,
+        steps,
+        intent=intent,
+        category=category
+    )
+
     auto_learn_from_steps(steps)
 
     print(f"[LEARNED] {command}")

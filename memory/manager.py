@@ -1,192 +1,305 @@
+# =====================================================
+# memory/manager.py
+# FINAL Optimized AYZN Memory System
+# No LLM calls during retrieval
+# Exact -> Intent Cache -> Fuzzy
+# =====================================================
+
+import sqlite3
 import json
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from memory.db import get_connection
+from rapidfuzz import process, fuzz
 
 
-# ---------------- VECTOR MODEL ----------------
-
-vectorizer = TfidfVectorizer()
-memory_texts = []  # stores all phrases for fitting
+DB_PATH = "memory/brain.db"
 
 
-# ---------------- NORMALIZATION ----------------
+# =====================================================
+# DB
+# =====================================================
 
-def normalize_text(text):
-    return text.lower().strip()
-
-
-# ---------------- ENCODING ----------------
-
-def encode_all_texts(texts):
-    global vectorizer
-    return vectorizer.fit_transform(texts).toarray()
+def get_connection():
+    return sqlite3.connect(DB_PATH)
 
 
-def encode_query(query):
-    global vectorizer, memory_texts
-
-    if not memory_texts:
-        return None
-
-    return vectorizer.transform([query]).toarray()[0]
-
-
-# ---------------- SIMILARITY ----------------
-
-def cosine(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
-
-
-# ---------------- LOAD MEMORY TEXTS ----------------
-
-def load_memory_texts():
-    global memory_texts
-
+def init_memory():
     conn = get_connection()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("SELECT phrases FROM memory")
-    rows = cursor.fetchall()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        raw_command TEXT UNIQUE,
+        intent TEXT,
+        category TEXT,
+        steps TEXT,
+        uses INTEGER DEFAULT 1
+    )
+    """)
 
-    cursor.close()
+    conn.commit()
     conn.close()
 
-    memory_texts = []
 
-    for row in rows:
-        phrases = json.loads(row[0])
-        memory_texts.extend(phrases)
+# =====================================================
+# NORMALIZE
+# =====================================================
+
+def normalize(text):
+    text = text.lower().strip()
+    text = " ".join(text.split())
+
+    fillers = [
+        "lets", "let's", "please",
+        "can you", "could you",
+        "yo", "hey", "ayzn"
+    ]
+
+    for x in fillers:
+        text = text.replace(x, "")
+
+    return " ".join(text.split()).strip()
 
 
-# ---------------- GET MEMORY ----------------
+# =====================================================
+# SAVE MEMORY
+# =====================================================
 
-def get_memory(task, threshold=0.3):
-    print("\n[MEMORY] START")
+def save_memory(command, steps, intent="general_task", category="general"):
+    print("\n[MEMORY SAVE]")
 
-    task = normalize_text(task)
+    command = normalize(command)
 
-    # -------- LOAD TEXTS --------
-    load_memory_texts()
+    conn = get_connection()
+    cur = conn.cursor()
 
-    if not memory_texts:
+    cur.execute("""
+    SELECT id, uses FROM memories
+    WHERE raw_command=?
+    """, (command,))
+
+    row = cur.fetchone()
+
+    if row:
+        cur.execute("""
+        UPDATE memories
+        SET steps=?, uses=?, intent=?, category=?
+        WHERE id=?
+        """, (
+            json.dumps(steps),
+            row[1] + 1,
+            intent,
+            category,
+            row[0]
+        ))
+
+        print("[MEMORY UPDATED]")
+
+    else:
+        cur.execute("""
+        INSERT INTO memories
+        (raw_command, intent, category, steps)
+        VALUES (?, ?, ?, ?)
+        """, (
+            command,
+            intent,
+            category,
+            json.dumps(steps)
+        ))
+
+        print("[MEMORY NEW]")
+
+    conn.commit()
+    conn.close()
+
+
+# =====================================================
+# EXACT
+# =====================================================
+
+def exact_match(command):
+    command = normalize(command)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT steps
+    FROM memories
+    WHERE raw_command=?
+    """, (command,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if row:
+        print("[L1 EXACT HIT ⚡]")
+        return json.loads(row[0])
+
+    return None
+
+
+# =====================================================
+# INTENT CACHE (NO LLM)
+# =====================================================
+
+def intent_match(command):
+    command = normalize(command)
+
+    words = command.split()
+
+    if len(words) >= 2:
+        guess = "_".join(words[:2])
+    else:
+        guess = command.replace(" ", "_")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT steps
+    FROM memories
+    WHERE intent=?
+    ORDER BY uses DESC
+    LIMIT 1
+    """, (guess,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if row:
+        print("[L2 INTENT HIT ⚡]")
+        return json.loads(row[0])
+
+    return None
+
+
+# =====================================================
+# FUZZY
+# =====================================================
+
+def fuzzy_match(command):
+    command = normalize(command)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT raw_command, steps
+    FROM memories
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
         print("[MEMORY] EMPTY")
         return None
 
-    print("[DEBUG] fitting vectorizer")
-    embeddings = encode_all_texts(memory_texts)
+    choices = [r[0] for r in rows]
 
-    query_vec = encode_query(task)
+    result = process.extractOne(
+        command,
+        choices,
+        scorer=fuzz.ratio
+    )
 
-    print("[DEBUG] DB fetch start")
+    if not result:
+        return None
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    best, score, idx = result
 
-    cursor.execute("SELECT phrases, steps FROM memory")
-    rows = cursor.fetchall()
+    print(f"[L3 SCORE] {score}")
 
-    cursor.close()
-    conn.close()
+    if score >= 60:
+        print("[L3 FUZZY HIT ⚡]")
+        return json.loads(rows[idx][1])
 
-    print("[DEBUG] DB fetch done")
+    return None
 
-    best_score = 0
-    best_steps = None
-    idx = 0
 
-    for row in rows:
-        phrases, steps_str = row
-        phrases = json.loads(phrases)
+# =====================================================
+# MAIN GET
+# =====================================================
 
-        for _ in phrases:
-            emb = embeddings[idx]
+def get_memory(command):
+    print("\n[MEMORY] START")
 
-            score = cosine(query_vec, emb)
+    result = exact_match(command)
+    if result:
+        return result
 
-            if score > best_score:
-                best_score = score
-                best_steps = steps_str
+    result = intent_match(command)
+    if result:
+        return result
 
-            idx += 1
-
-    print(f"[MEMORY] best score = {best_score}")
-
-    if best_score > threshold:
-        print("[MEMORY] HIT ⚡")
-        return json.loads(best_steps)
+    result = fuzzy_match(command)
+    if result:
+        return result
 
     print("[MEMORY] MISS")
     return None
 
 
-# ---------------- SAVE / MERGE ----------------
+# =====================================================
+# SHOW
+# =====================================================
 
-def save_memory(task, steps, merge_threshold=0.4):
-    print("\n[MEMORY SAVE]")
+def show_memory():
+    conn = get_connection()
+    cur = conn.cursor()
 
-    task = normalize_text(task)
+    cur.execute("""
+    SELECT id, raw_command, intent, category, uses
+    FROM memories
+    ORDER BY uses DESC
+    """)
 
-    load_memory_texts()
+    rows = cur.fetchall()
+    conn.close()
+
+    print("\n====== MEMORY ======")
+
+    for row in rows:
+        print(row)
+
+    print("====================")
+
+
+# =====================================================
+# DELETE
+# =====================================================
+
+def delete_memory(command):
+    command = normalize(command)
 
     conn = get_connection()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("SELECT id, phrases FROM memory")
-    rows = cursor.fetchall()
-
-    best_id = None
-    best_score = 0
-
-    if memory_texts:
-        embeddings = encode_all_texts(memory_texts)
-        query_vec = encode_query(task)
-
-        idx = 0
-
-        for row in rows:
-            _id, phrases = row
-            phrases = json.loads(phrases)
-
-            for _ in phrases:
-                emb = embeddings[idx]
-
-                score = cosine(query_vec, emb)
-
-                if score > best_score:
-                    best_score = score
-                    best_id = _id
-
-                idx += 1
-
-    # -------- MERGE --------
-    if best_score > merge_threshold:
-        print(f"[MEMORY MERGE] score={best_score:.2f}")
-
-        cursor.execute("SELECT phrases FROM memory WHERE id=?", (best_id,))
-        old_phrases = json.loads(cursor.fetchone()[0])
-
-        if task not in old_phrases:
-            old_phrases.append(task)
-
-        cursor.execute(
-            "UPDATE memory SET phrases=? WHERE id=?",
-            (json.dumps(old_phrases), best_id)
-        )
-
-    # -------- NEW --------
-    else:
-        print("[MEMORY NEW]")
-
-        cursor.execute(
-            "INSERT INTO memory (phrases, embedding, steps) VALUES (?, ?, ?)",
-            (
-                json.dumps([task]),
-                json.dumps([]),  # not used anymore
-                json.dumps(steps)
-            )
-        )
+    cur.execute("""
+    DELETE FROM memories
+    WHERE raw_command=?
+    """, (command,))
 
     conn.commit()
-    cursor.close()
     conn.close()
+
+    print("[MEMORY DELETED]")
+
+
+def clear_memory():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM memories")
+
+    conn.commit()
+    conn.close()
+
+    print("[MEMORY CLEARED]")
+
+
+# =====================================================
+# INIT
+# =====================================================
+
+init_memory()
