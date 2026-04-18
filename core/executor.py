@@ -1,27 +1,67 @@
+# =====================================================
+# core/executor.py
+# AYZN Main Execution Pipeline
+# Gemma + Hierarchical Memory + Step Skills
+# Rechecked / Clean Stable Version
+# =====================================================
+
 import pyautogui
 import time
 import json
 import subprocess
-import re
 
-from ai.models import ask_mistral
+from ai.models import ask_gemma, ask_intent
 from memory.manager import get_memory, save_memory
-from memory.skills import save_skill
-from system.apps import open_app, handle_install
+from memory.skills import auto_learn_from_steps
 
 
-ACTION_DELAY = 0.1
+ACTION_DELAY = 0.15
 
 
-# ---------------- ACTIVE APP ----------------
+# =====================================================
+# ACTIVE APP DETECTION
+# =====================================================
 
 def get_active_app():
-    script = 'tell application "System Events" to get name of first application process whose frontmost is true'
-    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-    return result.stdout.strip().lower()
+    try:
+        script = """
+        tell application "System Events"
+            get name of first application process whose frontmost is true
+        end tell
+        """
+
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True
+        )
+
+        return result.stdout.strip().lower()
+
+    except:
+        return ""
 
 
-def wait_for_app(app_name, timeout=5):
+# =====================================================
+# OPEN APP
+# =====================================================
+
+def open_app(app_name):
+    try:
+        subprocess.Popen(["open", "-a", app_name])
+        print(f"Opened {app_name}.app ⚡")
+        return True
+
+    except:
+        print(f"{app_name} not found ❌")
+        return False
+
+
+# =====================================================
+# WAIT FOR APP FOCUS
+# =====================================================
+
+def wait_for_focus(app_name, timeout=5):
     start = time.time()
 
     while time.time() - start < timeout:
@@ -33,226 +73,199 @@ def wait_for_app(app_name, timeout=5):
 
         time.sleep(0.3)
 
-    print("[FOCUS FAIL]")
+    print("[FOCUS TIMEOUT]")
     return False
 
 
-# ---------------- DIRECT COMMAND ----------------
+# =====================================================
+# EXTRACT JSON STEPS
+# =====================================================
 
-def handle_direct_command(command):
-    command = command.lower().strip()
-
-    # open app
-    if command.startswith("open "):
-        app = command.replace("open ", "").strip()
-        return [{"action": "open_app", "value": app}]
-
-    # close app
-    if command.startswith("close "):
-        return [{"action": "hotkey", "value": "command+q"}]
-
-    return None
-
-
-# ---------------- JSON PARSER ----------------
-
-def extract_json(text):
+def extract_steps(text):
     try:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if not match:
-            return None
+        start = text.find("{")
+        end = text.rfind("}")
 
-        json_text = match.group().strip()
+        if start == -1 or end == -1:
+            return []
 
-        if json_text.count("{") > json_text.count("}"):
-            json_text += "}"
+        raw = text[start:end + 1]
+        data = json.loads(raw)
 
-        return json.loads(json_text)
+        return data.get("steps", [])
 
     except Exception as e:
-        print("[JSON FIX ERROR]", e)
-        return None
-
-
-def parse_steps(response):
-    data = extract_json(response)
-
-    if not data:
-        print("[JSON ERROR]")
+        print("[JSON ERROR]", e)
         return []
 
-    steps = data.get("steps", [])
-    fixed_steps = []
+
+# =====================================================
+# CLEAN / FIX STEPS
+# =====================================================
+
+def clean_steps(steps):
+    cleaned = []
 
     for step in steps:
-        action = step.get("action")
-        value = step.get("value")
+        action = str(step.get("action", "")).strip().lower()
+        value = str(step.get("value", "")).strip().lower()
 
-        if action == "open":
-            step = {"action": "open_app", "value": "spotify"}
-
-        if action == "click":
+        if not action:
             continue
 
-        fixed_steps.append(step)
+        # convert cmd -> command
+        value = value.replace("cmd", "command")
 
-    return fixed_steps
+        # wrong combo sent as key
+        if action == "press_key" and "+" in value:
+            action = "hotkey"
 
+        # wrong single key sent as hotkey
+        if action == "hotkey" and "+" not in value:
+            action = "press_key"
 
-# ---------------- SAFETY ----------------
+        # wait safety cap
+        if action == "wait":
+            try:
+                wait_time = float(value)
+                wait_time = min(wait_time, 3)
+                value = str(wait_time)
+            except:
+                value = "1"
 
-def is_safe_step(step):
-    allowed = ["open_app", "press_key", "hotkey", "type", "wait"]
-    return step.get("action") in allowed
+        # remove empty values where needed
+        if action in ["open_app", "press_key", "hotkey", "type"] and not value:
+            continue
 
+        cleaned.append({
+            "action": action,
+            "value": value
+        })
 
-# ---------------- PLAN VALIDATION ----------------
-
-def is_good_plan(command, steps):
-    command = command.lower()
-
-    if "music" in command or "song" in command:
-        has_open = any(s["action"] == "open_app" for s in steps)
-        has_play = any(
-            s["action"] == "press_key" and s["value"] == "space"
-            for s in steps
-        )
-        return has_open and has_play
-
-    return True
-
-
-# ---------------- PLAN FIX ----------------
-
-def fix_plan(command, steps):
-    command = command.lower()
-
-    if "music" in command:
-        has_space = any(
-            s["action"] == "press_key" and s["value"] == "space"
-            for s in steps
-        )
-
-        if not has_space:
-            print("[AUTO FIX] adding play step")
-            steps.append({"action": "press_key", "value": "space"})
-
-    return steps
+    return cleaned
 
 
-# ---------------- SKILL EXTRACTION ----------------
+# =====================================================
+# EXECUTE ONE STEP
+# =====================================================
 
-def extract_and_save_skills(steps):
-    for step in steps:
-        action = step.get("action")
-        value = step.get("value")
+def run_step(step):
+    action = step["action"]
+    value = step["value"]
 
+    print("[STEP]", step)
+
+    try:
         if action == "open_app":
-            save_skill(f"open_{value.lower()}", [step])
+            if open_app(value):
+                wait_for_focus(value)
+                time.sleep(0.8)
 
-        elif action == "press_key" and value == "space":
-            save_skill("play_pause", [step])
+        elif action == "press_key":
+            pyautogui.press(value)
+
+        elif action == "hotkey":
+            keys = value.split("+")
+            pyautogui.hotkey(*keys)
+
+        elif action == "type":
+            pyautogui.write(value, interval=0.04)
+
+        elif action == "wait":
+            time.sleep(float(value))
+
+    except Exception as e:
+        print("[STEP ERROR]", e)
 
 
-# ---------------- EXECUTION ----------------
+# =====================================================
+# EXECUTE STEPS
+# =====================================================
 
 def execute_steps(steps):
     print("\n[EXECUTION START]")
 
     for step in steps:
-        if not is_safe_step(step):
-            print("[BLOCKED STEP]", step)
-            continue
-
-        action = step["action"]
-        value = step.get("value")
-
-        print(f"[STEP] {step}")
-
-        try:
-            if action == "open_app":
-                success = open_app(value)
-
-                if not success:
-                    handle_install(value)
-                else:
-                    wait_for_app(value)
-                    time.sleep(0.5)
-
-            elif action == "press_key":
-                pyautogui.press(value)
-
-            elif action == "hotkey":
-                pyautogui.hotkey(*value.split("+"))
-
-            elif action == "type":
-                pyautogui.write(value, interval=0.05)
-
-            elif action == "wait":
-                time.sleep(float(value))
-
-        except Exception as e:
-            print("[STEP ERROR]", e)
-
+        run_step(step)
         time.sleep(ACTION_DELAY)
 
     print("[EXECUTION END]\n")
 
 
-# ---------------- MAIN ----------------
+# =====================================================
+# MAIN EXECUTION ENTRY
+# =====================================================
 
 def smart_execute(command):
-    command = command.strip().lower()
+    command = command.strip()
 
     if not command:
-        print("[EMPTY COMMAND]")
         return False
 
     print("Checking memory...")
 
-    # -------- DIRECT COMMAND --------
-    direct_steps = handle_direct_command(command)
+    # -------------------------------------------------
+    # LEVEL 1/2/3 MEMORY
+    # -------------------------------------------------
 
-    if direct_steps:
-        print("[DIRECT COMMAND ⚡]")
-        execute_steps(direct_steps)
-        return True
-
-    # -------- MEMORY --------
     steps = get_memory(command)
 
     if steps:
         print("Memory hit ⚡")
-        steps = fix_plan(command, steps)
         execute_steps(steps)
         return True
 
-    # -------- AI --------
-    print("Trying Mistral ⚡")
+    # -------------------------------------------------
+    # INTENT CLASSIFIER
+    # -------------------------------------------------
 
-    response = ask_mistral(command)
-    print("Mistral response:\n", response)
+    meta = ask_intent(command)
 
-    steps = parse_steps(response)
+    intent = meta.get("intent", "general_task")
+    category = meta.get("category", "general")
+
+    print(f"[INTENT] {intent}")
+    print(f"[CATEGORY] {category}")
+
+    # -------------------------------------------------
+    # GEMMA PLANNER
+    # -------------------------------------------------
+
+    print("Trying Gemma ⚡")
+
+    response = ask_gemma(command)
+
+    print(response)
+
+    steps = extract_steps(response)
 
     if not steps:
         print("[FAILED] No valid steps")
         return False
 
-    # -------- FIX --------
-    steps = fix_plan(command, steps)
+    # -------------------------------------------------
+    # CLEAN PLAN
+    # -------------------------------------------------
 
-    # -------- EXECUTE --------
+    steps = clean_steps(steps)
+
+    if not steps:
+        print("[FAILED] Invalid cleaned steps")
+        return False
+
+    # -------------------------------------------------
+    # EXECUTE
+    # -------------------------------------------------
+
     execute_steps(steps)
 
-    # -------- SKILLS --------
-    extract_and_save_skills(steps)
+    # -------------------------------------------------
+    # LEARN SUCCESSFUL TASK
+    # -------------------------------------------------
 
-    # -------- SAVE MEMORY --------
-    if is_good_plan(command, steps):
-        save_memory(command, steps)
-        print(f"Auto-learned ⚡ → {command}")
-    else:
-        print("[SKIPPED SAVE] incomplete plan")
+    save_memory(command, steps)
+    auto_learn_from_steps(steps)
+
+    print(f"[LEARNED] {command}")
 
     return True
