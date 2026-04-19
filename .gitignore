@@ -13,7 +13,6 @@ logs/
 
 # Database
 memory.db
-brain.db
 
 # Models / cache
 *.safetensors

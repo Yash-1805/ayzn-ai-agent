@@ -237,6 +237,7 @@ Rules:
 - press_key = single key
 - hotkey = combinations like command+t
 - Always complete the task completely like play music means to song should be playing after execution example like this open Spotify + wait + press space
+- for website alsways open the browser with hotkey command+t then type url and press enter
 
 Format:
 {{
