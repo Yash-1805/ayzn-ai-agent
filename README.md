@@ -1,65 +1,133 @@
-AYZN
+AYZN – Local AI Desktop Agent
 
-AYZN is a local macOS AI desktop agent that automates tasks using keyboard control, memory learning, and LLM-driven planning.
+AYZN is a local-first AI desktop automation agent built for macOS. It converts natural language commands into executable desktop actions such as opening apps, controlling media, launching websites, and automating repetitive workflows.
 
-⸻
-
-Features
-	•	Keyboard-triggered execution (background agent)
-	•	Memory system using TF-IDF and SQLite
-	•	Learns from previous commands
-	•	LLM fallback using Mistral via Ollama
-	•	Direct command execution (fast path, no AI)
-	•	Step-level skill learning
-	•	Safe execution with validated actions
+The project is designed to run privately on your machine using local language models through Ollama.
 
 ⸻
 
-Architecture
+Core Idea
+
+Instead of relying on cloud assistants, AYZN works directly on your computer.
+
+You type:
+
+play music
+watch youtube
+open vscode
+open github
+
+AYZN plans the task, executes it, and remembers successful workflows for faster future use.
+
+⸻
+
+Current Features
+
+Local AI Planning
+
+Uses Gemma through Ollama to convert commands into structured desktop steps.
+
+Hierarchical Memory System
+
+AYZN learns successful tasks and stores them in memory.
+
+Memory retrieval layers:
+
+L1 Exact Match
+L2 Intent Match
+L3 Fuzzy Match
+L4 AI Planning Fallback
+
+This allows previously learned commands to run instantly without loading the model every time.
+
+Skill Library
+
+Reusable atomic actions are automatically learned, such as:
+
+open_spotify
+open_arc
+new_tab
+play_pause
+
+Desktop Automation
+
+Supports actions like:
+
+open_app
+press_key
+hotkey
+type
+wait
+
+Background Activation
+
+Runs quietly in background and activates on key press.
+
+⸻
+
+Example Commands
+
+play music
+pause music
+watch youtube
+open github
+open vscode
+open terminal
+show memory
+show skills
+delete memory play music
+
+⸻
+
+Project Structure
+
+AYZN/
+├── ai/
+│   └── models.py
+├── core/
+│   └── executor.py
+├── memory/
+│   ├── manager.py
+│   ├── skills.py
+│   └── brain.db
+├── main.py
+├── requirements.txt
+└── README.md
+
+⸻
+
+How It Works
 
 User Command
-→ Direct Command (fast path)
-→ Memory (learned tasks)
-→ LLM (Mistral fallback)
-→ Execution Engine
+↓
+Memory Lookup
+↓ (if found)
+Instant Execution
+or
+Memory Miss
+↓
+Gemma Planning
+↓
+Execution
+↓
+Store in Memory
 
 ⸻
 
-Installation
+Requirements
 
-1. Clone the repository
+* macOS
+* Python 3.10+
+* Ollama installed
+* Gemma model pulled locally
 
-git clone https://github.com/Yash-1805/ayzn-ai-agent.git
-cd ayzn-ai-agent
-
-
-⸻
-
-2. Create virtual environment
-
-python3 -m venv venv
-source venv/bin/activate
-
-
-⸻
-
-3. Install dependencies
+Install dependencies:
 
 pip install -r requirements.txt
 
+Install model:
 
-⸻
-
-4. Install Ollama
-
-Download from: https://ollama.com
-
-⸻
-
-5. Pull Mistral model
-
-ollama pull mistral
-
+ollama pull gemma4
 
 ⸻
 
@@ -67,90 +135,54 @@ Run
 
 python main.py
 
-Press:
+⸻
 
-j
+Memory Management
 
-to activate the agent.
+Inside AYZN:
+
+show memory
+clear memory
+delete memory play music
+show skills
+clear skills
+delete skill open_spotify
 
 ⸻
 
-Example Commands
+Why AYZN
 
-play music
-open chrome
-open terminal
-search youtube
+AYZN is focused on:
 
+privacy
+speed over time
+local intelligence
+daily usefulness
+self-improving workflows
 
-⸻
-
-How It Works
-	•	Direct commands are executed instantly
-	•	Memory reuses previously successful tasks
-	•	LLM generates steps for new tasks
-	•	Executor runs validated keyboard actions
-
-⸻
-
-Supported Actions
-
-open_app: <app>
-press_key: <key>
-hotkey: key+key
-type: <text>
-wait: <seconds>
-
-
-⸻
-
-Project Structure
-
-core/
-  executor.py
-  listener.py
-
-system/
-  apps.py
-
-memory/
-  manager.py
-  db.py
-  skills.py
-
-ai/
-  models.py
-
-main.py
-requirements.txt
-
-
-⸻
-
-Limitations
-	•	macOS only
-	•	No GUI yet
-	•	No voice control yet
-	•	Limited multi-step reasoning
+The more you use it, the smarter and faster it becomes.
 
 ⸻
 
 Roadmap
-	•	Logging system
-	•	Floating UI
-	•	Voice control
-	•	Advanced planning
-    •	Vision support (OCR + UI understanding)
-	•	Autonomous workflows
+
+Planned future upgrades:
+
+voice control
+vision / screenshot understanding
+sleep mode / wake mode
+task chaining
+better app awareness
+workflow editor
 
 ⸻
 
-Version
+Status
 
-v0.5 (Alpha)
+Active experimental build. Rapidly evolving.
 
 ⸻
 
-License
+Author
 
-Not specified yet.
+Built by Yash.
